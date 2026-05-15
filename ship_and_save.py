@@ -22,7 +22,8 @@ from datetime import datetime
 from dotenv import load_dotenv
 
 from fedex_ship import create_shipment, TEST_SHIPMENT
-from drive_upload import upload_invoice  # we'll reuse this — same logic works for labels
+from drive_upload import upload_invoice
+from shipping_log import log_shipment  # we'll reuse this — same logic works for labels
 
 load_dotenv()
 DRIVE_FOLDER = os.getenv("GOOGLE_DRIVE_FOLDER_ID")
@@ -60,7 +61,20 @@ def ship_and_save(order_number):
     print(f"   ✅ Uploaded to /FedEx Invoices/{upload_result['folder']}/{upload_result['name']}")
     print(f"   🔗 {upload_result['link']}")
     print()
-    print(f"🎉 End-to-end complete: Shipment → Label → Drive")
+    # Append to shipping log
+    try:
+        log_shipment(
+            order_name=order_number,
+            tracking_number=tracking,
+            country="GB",  # TODO: pull real country from Shopify order later
+            label_drive_link=upload_result.get("link", ""),
+            invoice_drive_link="",
+        )
+        print(f"📋 Logged to shipping log Sheet")
+    except Exception as e:
+        print(f"⚠️  Shipping log write failed: {e}")
+
+    print(f"🎉 End-to-end complete: Shipment → Label → Drive → Log")
 
 
 if __name__ == "__main__":

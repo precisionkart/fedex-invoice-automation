@@ -36,6 +36,8 @@ from generate_invoice import (
 )
 from drive_upload import upload_invoice
 from country_router import classify_destination
+from shipping_log import find_shipment, update_status
+from shopify_fulfill import fulfill_order
 
 load_dotenv()
 
@@ -143,6 +145,71 @@ def orders_webhook():
         # Return 200 anyway so Shopify doesn't retry storms.
         # We log so we can investigate later.
         return ("logged", 200)
+
+# ============================================================
+# FedEx Tracking Webhook
+# Receives push notifications from FedEx when shipment events
+# happen (Picked Up, In Transit, Delivered, etc.)
+# ============================================================
+@app.route("/webhook/fedex/track", methods=["POST"])
+def fedex_track_webhook():
+    raw_body = request.get_data()
+    log.info(f"FedEx tracking webhook received: bytes={len(raw_body)}")
+
+    try:
+        payload = json.loads(raw_body)
+    except Exception as e:
+        log.error(f"Bad JSON body from FedEx: {e}")
+        return ("bad json", 400)
+
+    tracking_number = (
+        payload.get("trackingNumber")
+        or payload.get("trackingNbr")
+        or (payload.get("output", {}) or {}).get("trackingNumber")
+    )
+    events = (
+        payload.get("events")
+        or payload.get("notifications")
+        or (payload.get("output", {}) or {}).get("events")
+        or []
+    )
+
+    if not tracking_number:
+        log.warning(f"FedEx webhook missing tracking number. Payload keys: {list(payload.keys())}")
+        return ("missing tracking", 200)
+
+    log.info(f"📍 FedEx event for tracking {tracking_number} — {len(events)} event(s)")
+
+    for event in events:
+        event_type = event.get("eventType") or event.get("type") or ""
+        description = event.get("eventDescription") or event.get("description") or ""
+        timestamp = event.get("eventTimestamp") or event.get("timestamp") or ""
+        location = (event.get("scanLocation") or {}).get("city") or event.get("location") or ""
+
+        log.info(f"   {event_type:6s} {description:30s} {timestamp} {location}")
+
+        if event_type == "PU":
+            log.info(f"🚚 Package PICKED UP — looking up shipment...")
+            try:
+                shipment = find_shipment(tracking_number)
+                if not shipment:
+                    log.warning(f"   No matching shipping log row for {tracking_number} — manual review")
+                    continue
+                order_name = shipment["order"]
+                if shipment["status"] == "fulfilled":
+                    log.info(f"   Order {order_name} already fulfilled, skipping")
+                    continue
+                log.info(f"   Fulfilling Shopify order {order_name}...")
+                fulfill_order(order_name, tracking_number)
+                update_status(shipment["row_index"], status="fulfilled",
+                              last_event=f"Picked up — {location}")
+                log.info(f"   ✅ Order {order_name} marked fulfilled in Shopify + Sheet updated")
+            except Exception as e:
+                log.error(f"   ❌ Failed to auto-fulfill: {e}")
+        elif event_type in ("DL", "OD"):
+            log.info(f"📦 Delivered or out-for-delivery — informational only")
+
+    return ("ok", 200)
 
 
 if __name__ == "__main__":
