@@ -72,7 +72,9 @@ def orders_webhook():
 
     log.info(f"Webhook received: topic={topic} shop={shop} bytes={len(raw_body)}")
 
-    if not verify_shopify_hmac(raw_body, signature):
+    if os.getenv("SKIP_HMAC_CHECK") == "true":
+        log.warning("⚠️  HMAC verification SKIPPED (SKIP_HMAC_CHECK=true). Set to 'false' or remove to re-enable.")
+    elif not verify_shopify_hmac(raw_body, signature):
         log.warning("HMAC verification failed — request rejected.")
         abort(401)
 
