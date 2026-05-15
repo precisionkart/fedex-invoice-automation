@@ -35,6 +35,7 @@ from generate_invoice import (
     render_pdf,
 )
 from drive_upload import upload_invoice
+from country_router import classify_destination
 
 load_dotenv()
 
@@ -98,6 +99,24 @@ def orders_webhook():
     try:
         token = get_access_token()
         order = fetch_order(token, str(order_name))
+
+        # --- Country routing ---
+        shipping_country = (order.get("shippingAddress") or {}).get("countryCodeV2", "")
+        routing = classify_destination(shipping_country)
+        log.info(f"Country routing: {shipping_country} → {routing['action']} ({routing['region']}) — {routing['reason']}")
+
+        if routing["action"] == "skip":
+            log.info(f"⏭️  Skipping order {order_name} — {routing['reason']}")
+            return ("skipped:uk", 200)
+
+        if routing["action"] == "manual_review":
+            log.warning(f"⚠️  Order {order_name} needs manual review — {routing['reason']}")
+            return ("manual_review", 200)
+
+        # If we got here, action == "ship" (EU or US)
+        if routing["needs_customs_pdf"]:
+            log.info(f"📋 US order — customs declaration PDF will be required (not yet implemented)")
+
         invoice, warnings = build_invoice_from_order(order)
 
         for w in warnings:
