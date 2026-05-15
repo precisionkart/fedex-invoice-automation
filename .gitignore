@@ -1,0 +1,16 @@
+# Secrets — NEVER commit
+.env
+
+# Python
+venv/
+__pycache__/
+*.pyc
+.DS_Store
+
+# Generated invoices (the actual PDFs)
+*.pdf
+
+# VS Code workspace settings
+.vscode/
+google-oauth-client.json
+google-token.json
