@@ -147,6 +147,11 @@ query getOrderByName($q: String!) {
                 metafields(first: 20, namespace: "custom") {
                   edges { node { key value } }
                 }
+                product {
+                  metafields(first: 20, namespace: "custom") {
+                    edges { node { key value } }
+                  }
+                }
               }
             }
           }

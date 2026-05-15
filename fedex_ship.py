@@ -188,7 +188,13 @@ def create_shipment(shipment):
         "X-locale":       "en_GB",
     }
 
+    import json as _json
     response = requests.post(url, headers=headers, json=body, timeout=30)
+    if response.status_code >= 400:
+        print(f"⚠️  FedEx Ship API returned {response.status_code}")
+        print(f"   Response: {response.text[:3000]}")
+        print(f"   Request body sent:")
+        print(_json.dumps(body, indent=2)[:5000])
     response.raise_for_status()
     data = response.json()
 
