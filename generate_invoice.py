@@ -223,10 +223,16 @@ def kg(weight_value, weight_unit):
 
 def build_line_items(order):
     """
-    Convert Shopify line items into invoice rows.
-    Aggregates identical variants (same SKU). Pulls metafields and weight.
+    Convert Shopify line items into invoice rows, grouped by customs identity:
+    same HS code + country of origin + customs description = one line.
+
+    This matches how customs reads commercial invoices — they care about
+    commodity classification, not internal SKU variations.
+
+    For lines with mixed unit prices or weights (rare), the displayed
+    per-unit values become the weighted averages; totals are exact.
     """
-    aggregated = {}
+    groups = {}
     warnings = []
 
     for edge in order["lineItems"]["edges"]:
@@ -235,7 +241,6 @@ def build_line_items(order):
         sku = li.get("sku") or ""
         qty = li.get("quantity") or 0
 
-        # Pull metafields
         mfs = {mfe["node"]["key"]: mfe["node"]["value"]
                for mfe in variant.get("metafields", {}).get("edges", [])}
 
@@ -246,7 +251,6 @@ def build_line_items(order):
 
         origin, origin_status = normalise_country_code(origin_raw)
 
-        # Track data issues for warnings
         if not hs_code:
             warnings.append(f"  • {sku}: missing custom.fedex_hs_code")
         if origin_status == "fixed_from_GBP":
@@ -262,29 +266,50 @@ def build_line_items(order):
             warnings.append(f"  • {sku}: invalid unit price '{unit_price}' — using 0")
             unit_price = 0
 
-        # Weight from built-in field
         meas = (variant.get("inventoryItem") or {}).get("measurement") or {}
         w = meas.get("weight") or {}
         unit_w = kg(w.get("value"), w.get("unit"))
         if unit_w == 0:
             warnings.append(f"  • {sku}: variant weight not set in Shopify")
 
-        # Aggregate by (sku, description, hs_code, origin)
-        key = (sku, description, hs_code, origin)
-        if key in aggregated:
-            aggregated[key]["qty"] += qty
+        # GROUP KEY: customs identity, not SKU
+        key = (hs_code, origin, description)
+
+        if key in groups:
+            g = groups[key]
+            g["total_qty"]    += qty
+            g["total_weight"] += qty * unit_w
+            g["total_value"]  += qty * unit_price
+            g["skus"].add(sku)
         else:
-            aggregated[key] = {
-                "description": description,
-                "sku": sku,
-                "hs_code": hs_code,
-                "origin": origin,
-                "qty": qty,
-                "unit_weight_kg": unit_w,
-                "unit_price_gbp": unit_price,
+            groups[key] = {
+                "description":  description,
+                "hs_code":      hs_code,
+                "origin":       origin,
+                "total_qty":    qty,
+                "total_weight": qty * unit_w,
+                "total_value":  qty * unit_price,
+                "skus":         {sku},
             }
 
-    return list(aggregated.values()), warnings
+    # Convert groups to the line-item shape the renderer expects
+    line_items = []
+    for g in groups.values():
+        qty = g["total_qty"]
+        # Per-unit values become weighted averages (totals are always exact)
+        unit_w = (g["total_weight"] / qty) if qty else 0
+        unit_p = (g["total_value"]  / qty) if qty else 0
+        line_items.append({
+            "description":     g["description"],
+            "sku":              ",".join(sorted(s for s in g["skus"] if s)) or "",
+            "hs_code":         g["hs_code"],
+            "origin":          g["origin"],
+            "qty":             qty,
+            "unit_weight_kg":  unit_w,
+            "unit_price_gbp":  unit_p,
+        })
+
+    return line_items, warnings
 
 
 # ---------------------------------------------------------------------------
