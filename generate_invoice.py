@@ -160,9 +160,9 @@ query getOrderByName($q: String!) {
 
 def fetch_order(token, order_name):
     """Fetch one order by its name (e.g. '04058-SHP' or '#04058-SHP')."""
-    # Shopify's search expects "name:#04058-SHP"
-    clean = order_name.lstrip("#")
-    data = graphql(token, ORDER_QUERY, {"q": f"name:#{clean}"})
+    # Shopify expects the name without leading '#' in its search syntax
+    clean = order_name.lstrip("#").strip()
+    data = graphql(token, ORDER_QUERY, {"q": f"name:{clean}"})
     edges = data["orders"]["edges"]
     if not edges:
         raise RuntimeError(f"Order '{order_name}' not found.")

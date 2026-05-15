@@ -1,3 +1,7 @@
+# === BOOT: write credential files from env ===
+import startup  # noqa: E402
+# === END BOOT ===
+
 """
 Webhook server.
 Receives 'order paid' webhooks from Shopify, generates a commercial invoice,
