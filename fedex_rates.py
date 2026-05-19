@@ -99,6 +99,9 @@ def get_rates(shipment):
     }
 
     response = requests.post(url, headers=headers, json=body, timeout=20)
+    if response.status_code >= 400:
+        print(f'⚠️  FedEx Rates returned {response.status_code}')
+        print(f'   Response: {response.text[:2000]}')
     response.raise_for_status()
     data = response.json()
 

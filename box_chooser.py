@@ -1,126 +1,146 @@
 """
-Choose the smallest package that fits an order.
+Box / package chooser for Precision Kart shipments.
+
+Picks the smallest standard packaging that:
+  - Fits the largest item in the order (after padding)
+  - Has weight capacity to hold the total order weight
 
 Rules:
-  - Calculate total volume of items × 1.3 padding factor
-  - Single item < 500g AND fits flat → envelope
-  - Otherwise → box
-  - Pick smallest package where volume + max single dimension fit
-  - If nothing fits → return largest + flag for manual review
+  - Envelope (M3 Envelope) only used if: 1 item, <500g, max dimension <=35cm
+  - Otherwise smallest-fitting box wins
+  - 1.3x padding applied to longest dimension (room for bubble wrap)
 
-Packages match Precision Kart's real packaging stock.
-Dimensions in cm, weights in grams.
+NOTES:
+  - X-Large Box is the "Majority Pick" — most orders end up here. Just an info note,
+    the picker uses smallest-fitting box.
+  - All package weights are the empty-box tare weight in kg.
+  - When sandbox tracking numbers exist, this code is not used; that's purely FedEx.
 """
 
-PADDING_FACTOR = 1.3
-
-# Ordered smallest → largest by volume (within each category)
-# Format: (name, length_cm, width_cm, height_cm, weight_grams, is_envelope)
+# (name, length_cm, width_cm, height_cm, tare_weight_g, is_envelope)
+# Sorted ascending by total volume so smallest tested first.
 PACKAGES = [
-    # Envelopes (flexible — thin profile)
-    ("Black Envelope",     22,   16,   2,   20,   True),
-    ("M1 Envelope",        28,   22,   1,   60,   True),
-    ("M3 Envelope",        35,   27,   1,   71,   True),
-    # Boxes — small to large
-    ("Small Box",          11.5, 16.5, 5,   32,   False),
-    ("Medium Box",         18,   15,   7.5, 53,   False),
-    ("Carrier Fold Box",   16,   8,    16,  62,   False),
-    ("Large Box",          26,   24,   4,   68,   False),
-    ("M1 Box Envelope",    28,   22,   7,   60,   False),
-    ("X-Large Box",        26,   24,   8,   96,   False),
-    ("M3 BOX ENVELOPE",    35,   28,   6,   100,  False),
-    ("M3 Box Envelope",    32,   21,   8,   60,   False),
-    ("XX-Large Box",       26,   26,   10,  136,  False),
-    ("Chain Lube Box",     26,   21,   21,  100,  False),
-    ("3XL Shoebox",        40,   25.5, 15,  150,  False),
+    ("Small Box",          11.5, 16.5,  5,    32,  False),
+    ("Carrier Fold Box",   16,   8,    16,    62,  False),
+    ("Large Box",          26,   24,    4,    68,  False),
+    ("M1 Box Envelope",    28,   22,    7,    60,  False),
+    ("M3 Envelope",        35,   27,    1,    71,  True),   # envelope — strict rules
+    ("X-Large Box",        26,   24,    8,    96,  False),  # MAJORITY PICK
+    ("M3 Box Envelope",    32,   21,    8,    60,  False),
+    ("XX-Large Box",       26,   26,   10,   136,  False),
+    ("Chain Lube Box",     26,   21,   21,   100,  False),
+    ("3XL Shoebox",        40,   25.5, 15,   150,  False),
 ]
 
 
-def calc_volume(L, W, H):
-    return L * W * H
+# Padding factor — 5% buffer on longest dimension only.
+# Kart parts are rigid with defined edges; small buffer accounts for bubble wrap.
+PADDING_FACTOR = 1.05
+
+# Envelope rules
+ENVELOPE_MAX_WEIGHT_KG = 0.5
+ENVELOPE_MAX_DIM_CM    = 35.0
 
 
-def fits_in_package(item_L, item_W, item_H, pkg_L, pkg_W, pkg_H):
-    item_dims = sorted([item_L, item_W, item_H])
-    pkg_dims  = sorted([pkg_L, pkg_W, pkg_H])
-    return all(i <= p for i, p in zip(item_dims, pkg_dims))
+def _item_fits(item, pkg_dims):
+    """Check if an item fits in a package. 5% padding on longest dim only."""
+    item_dims = sorted([item["length_cm"], item["width_cm"], item["height_cm"]], reverse=True)
+    pkg_sorted = sorted(pkg_dims, reverse=True)
+    # Longest dim gets padding; mid + short fit exactly
+    return (
+        item_dims[0] * PADDING_FACTOR <= pkg_sorted[0]  # longest
+        and item_dims[1]              <= pkg_sorted[1]  # mid
+        and item_dims[2]              <= pkg_sorted[2]  # short
+    )
 
 
 def choose_package(line_items):
     """
-    Args: list of dicts like
-      {"length_cm": 13.5, "width_cm": 6.6, "height_cm": 2,
-       "weight_kg": 0.4, "quantity": 1}
+    Decide which package to use for an order.
 
-    Returns: dict with package selection + total weight + manual_review flag.
+    Args:
+        line_items: list of dicts with length_cm, width_cm, height_cm, weight_kg, quantity, title
+    Returns:
+        dict with package_name, length_cm, width_cm, height_cm, weight_kg, is_envelope
+        OR dict with manual_review=True and reason if no fit
     """
     if not line_items:
         return {"manual_review": True, "reason": "No line items"}
 
-    for it in line_items:
-        for k in ("length_cm", "width_cm", "height_cm", "weight_kg", "quantity"):
-            if it.get(k) in (None, 0):
-                return {
-                    "manual_review": True,
-                    "reason": f"Item missing {k} — add to product metafields",
-                }
+    # Find largest single item (by longest dimension)
+    largest = max(line_items, key=lambda it: max(
+        it.get("length_cm", 0), it.get("width_cm", 0), it.get("height_cm", 0)
+    ))
 
-    total_volume_needed = sum(
-        calc_volume(it["length_cm"], it["width_cm"], it["height_cm"]) * it["quantity"]
-        for it in line_items
-    ) * PADDING_FACTOR
-    total_weight_kg = sum(it["weight_kg"] * it["quantity"] for it in line_items)
-    total_items     = sum(it["quantity"] for it in line_items)
-    max_single_dim  = max(
-        max(it["length_cm"], it["width_cm"], it["height_cm"])
+    total_qty    = sum(it.get("quantity", 1) for it in line_items)
+    total_weight = sum(
+        (it.get("weight_kg", 0) or 0) * it.get("quantity", 1)
         for it in line_items
     )
 
-    use_envelope_class = (
-        total_items == 1 and total_weight_kg < 0.5 and max_single_dim < 35
+    # Envelope eligibility (M3 Envelope): strict rules
+    envelope_eligible = (
+        len(line_items) == 1
+        and total_qty   == 1
+        and total_weight < ENVELOPE_MAX_WEIGHT_KG
+        and max(largest["length_cm"], largest["width_cm"], largest["height_cm"]) <= ENVELOPE_MAX_DIM_CM
     )
 
-    for name, L, W, H, pkg_g, is_env in PACKAGES:
-        if not use_envelope_class and is_env:
+    # Try each package in size order (smallest to largest)
+    for name, L, W, H, tare_g, is_envelope in PACKAGES:
+        # Skip envelopes if not eligible
+        if is_envelope and not envelope_eligible:
             continue
-        pkg_volume = calc_volume(L, W, H)
-        if pkg_volume < total_volume_needed:
+
+        # Does the largest item fit (with padding)?
+        if not _item_fits(largest, (L, W, H)):
             continue
-        if max_single_dim > max(L, W, H):
-            continue
-        if not all(
-            fits_in_package(it["length_cm"], it["width_cm"], it["height_cm"], L, W, H)
-            for it in line_items
-        ):
-            continue
+
+        # Total weight including tare
+        total_kg = round(total_weight + (tare_g / 1000.0), 3)
+
         return {
             "package_name":  name,
             "length_cm":     L,
             "width_cm":      W,
             "height_cm":     H,
-            "weight_kg":     round(total_weight_kg + pkg_g / 1000, 3),
-            "is_envelope":   is_env,
-            "manual_review": False,
-            "reason":        f"Smallest fitting (vol {total_volume_needed:.0f}cm³, max dim {max_single_dim}cm)",
+            "weight_kg":     total_kg,
+            "is_envelope":   is_envelope,
         }
 
-    # Nothing fit — use largest
-    name, L, W, H, pkg_g, is_env = PACKAGES[-1]
+    # Nothing fits — flag for manual review
     return {
-        "package_name":  name,
-        "length_cm":     L,
-        "width_cm":      W,
-        "height_cm":     H,
-        "weight_kg":     round(total_weight_kg + pkg_g / 1000, 3),
-        "is_envelope":   is_env,
         "manual_review": True,
-        "reason":        "No package large enough — using largest, flag for manual review",
+        "reason": (
+            f"Largest item {largest.get('title', 'unknown')} "
+            f"({largest['length_cm']}×{largest['width_cm']}×{largest['height_cm']}cm) "
+            "doesn't fit any standard box"
+        ),
     }
 
 
 if __name__ == "__main__":
-    print("Testing Precision Chain scenarios...")
+    # Quick self-test
+    test_items_chain = [{
+        "title": "Chain", "length_cm": 13.5, "width_cm": 6.6, "height_cm": 2,
+        "weight_kg": 0.275, "quantity": 1,
+    }]
+    test_items_two_sprockets = [
+        {"title": "Sprocket Protector", "length_cm": 2, "width_cm": 22, "height_cm": 22,
+         "weight_kg": 0.41, "quantity": 1},
+        {"title": "Sprocket Protector", "length_cm": 2, "width_cm": 22, "height_cm": 22,
+         "weight_kg": 0.36, "quantity": 1},
+    ]
+    test_items_huge = [{
+        "title": "Frame", "length_cm": 60, "width_cm": 40, "height_cm": 30,
+        "weight_kg": 5, "quantity": 1,
+    }]
+
+    print("Chain (1 item, 0.275kg):")
+    print(f"  → {choose_package(test_items_chain)}")
     print()
-    print("1 chain @ 350g:", choose_package([
-        {"length_cm": 13.5, "width_cm": 6.6, "height_cm": 2, "weight_kg": 0.35, "quantity": 1}
-    ]))
+    print("2 Sprocket Protectors:")
+    print(f"  → {choose_package(test_items_two_sprockets)}")
+    print()
+    print("Huge frame (won't fit):")
+    print(f"  → {choose_package(test_items_huge)}")

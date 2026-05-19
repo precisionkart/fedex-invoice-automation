@@ -128,18 +128,35 @@ def extract_items(order):
 def build_fedex_recipient(order):
     """Translate Shopify shipping address → FedEx recipient block."""
     addr = order.get("shippingAddress") or {}
+    country = addr.get("countryCodeV2") or addr.get("country") or ""
+    
+    # Province code: only required for US/CA; for others, omit if missing or invalid (>2 chars)
+    province = addr.get("provinceCode") or ""
+    if country in ("US", "CA") and len(province) != 2:
+        province = ""  # let FedEx complain rather than ship with bad value
+    elif len(province) > 2:
+        province = ""  # FedEx max is 2 chars; for non-US/CA, just omit
+    
+    address_block = {
+        "streetLines":  [s for s in [addr.get("address1"), addr.get("address2")] if s],
+        "city":         addr.get("city") or "",
+        "postalCode":   addr.get("zip") or "",
+        "countryCode":  country,
+    }
+    if province:
+        address_block["stateOrProvinceCode"] = province
+    
+    # Phone: FedEx accepts blank for many EU destinations, but safer to fallback to Precision Kart's
+    phone = (addr.get("phone") or "").strip()
+    if not phone:
+        phone = "+447000000000"  # Precision Kart fallback so FedEx can call us on issues
+    
     return {
         "contact": {
             "personName":  addr.get("name") or "Customer",
-            "phoneNumber": (addr.get("phone") or "+10000000000")[:15],
+            "phoneNumber": phone[:15],
         },
-        "address": {
-            "streetLines":  [s for s in [addr.get("address1"), addr.get("address2")] if s],
-            "city":         addr.get("city") or "",
-            "stateOrProvinceCode": addr.get("provinceCode") or "",
-            "postalCode":   addr.get("zip") or "",
-            "countryCode":  addr.get("countryCodeV2") or addr.get("country") or "",
-        },
+        "address": address_block,
     }
 
 
