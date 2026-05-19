@@ -100,7 +100,21 @@ def orders_webhook():
 
     try:
         token = get_access_token()
-        order = fetch_order(token, str(order_name))
+        # Retry: Shopify's search API has eventual consistency — orders may not be 
+        # immediately visible when the webhook fires. Try a few times with backoff.
+        import time
+        order = None
+        for attempt in range(4):
+            try:
+                order = fetch_order(token, str(order_name))
+                break
+            except RuntimeError as e:
+                if "not found" in str(e).lower() and attempt < 3:
+                    wait = [1, 3, 7][attempt]
+                    log.warning(f"Order {order_name} not visible yet (attempt {attempt+1}/4), retrying in {wait}s...")
+                    time.sleep(wait)
+                    continue
+                raise
 
         # --- Country routing ---
         shipping_country = (order.get("shippingAddress") or {}).get("countryCodeV2", "")
