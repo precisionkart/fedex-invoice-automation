@@ -130,9 +130,6 @@ def orders_webhook():
             return ("manual_review", 200)
 
         # If we got here, action == "ship" (EU or US)
-        if routing["needs_customs_pdf"]:
-            log.info(f"📋 US order — customs declaration PDF will be required (not yet implemented)")
-
         invoice, warnings = build_invoice_from_order(order)
 
         for w in warnings:
@@ -150,6 +147,59 @@ def orders_webhook():
             log.info(f"Uploaded to Drive: {result['link']}")
         else:
             log.warning("GOOGLE_DRIVE_FOLDER_ID not set — skipped Drive upload.")
+
+        # Generate customs declaration PDF for US orders (after invoice succeeded)
+        if routing.get("needs_customs_pdf"):
+            try:
+                from generate_customs_declaration import (
+                    build_line_items as cd_build_line_items,
+                    group_line_items as cd_group_line_items,
+                    render_customs_pdf as cd_render_pdf,
+                )
+
+                cd_raw = cd_build_line_items(order)
+                cd_grouped = cd_group_line_items(cd_raw)
+
+                # Build consignee from shipping address
+                ship_addr = order.get("shippingAddress") or {}
+                customer  = order.get("customer") or {}
+                consignee = {
+                    "name":         (ship_addr.get("name")
+                                     or f"{ship_addr.get('firstName','')} {ship_addr.get('lastName','')}".strip()
+                                     or customer.get("displayName") or ""),
+                    "company":      ship_addr.get("company"),
+                    "street_lines": [ship_addr.get("address1"), ship_addr.get("address2")],
+                    "city":         ship_addr.get("city"),
+                    "province":     ship_addr.get("provinceCode") or ship_addr.get("province"),
+                    "zip":          ship_addr.get("zip"),
+                    "country":      ship_addr.get("country"),
+                    "email":        customer.get("email"),
+                }
+
+                ship_date = order_dt.strftime("%d/%m/%Y")
+                invoice_ref = f"SH-{order_name.lstrip('#')}"
+                currency = order.get("currencyCode") or "GBP"
+
+                customs_path = f"/tmp/Customs_Declaration_{safe_name}.pdf"
+                cd_render_pdf(
+                    order_name.lstrip("#"), cd_grouped, customs_path,
+                    consignee=consignee,
+                    ship_date=ship_date,
+                    invoice_ref=invoice_ref,
+                    currency=currency,
+                )
+                log.info(f"Customs declaration written to {customs_path}")
+
+                customs_folder = os.getenv("GOOGLE_DRIVE_CUSTOMS_FOLDER_ID")
+                if customs_folder:
+                    customs_result = upload_invoice(customs_path, customs_folder, order_date=order_dt)
+                    log.info(f"Customs declaration uploaded to Drive: {customs_result['link']}")
+                else:
+                    log.warning("GOOGLE_DRIVE_CUSTOMS_FOLDER_ID not set — customs PDF generated but not uploaded.")
+            except Exception as e:
+                # Don't fail the webhook if customs declaration fails — invoice is more important
+                log.error(f"Customs declaration generation failed: {e}")
+                log.error(traceback.format_exc())
 
         return ("ok", 200)
 
