@@ -201,6 +201,49 @@ def orders_webhook():
                 log.error(f"Customs declaration generation failed: {e}")
                 log.error(traceback.format_exc())
 
+        # === Auto-create FedEx shipment for US/EU orders ===
+        # Runs in background thread so webhook returns 200 within Shopify's 5s timeout.
+        # Respects FEDEX_DRY_RUN env var. Idempotent: ship_real_order.py uses
+        # Shopify fulfill API which will fail gracefully if already fulfilled.
+        if routing["action"] == "ship":
+            try:
+                import threading
+
+                def _ship_in_background(order_name_local, region_local):
+                    try:
+                        from ship_real_order import ship_order
+
+                        # Safety caps — manual review if exceeded
+                        # (ship_order does its own dimension/weight calc; we cap on invoice total)
+                        total_value_gbp = float(invoice.get("total") or 0)
+                        if total_value_gbp > 2500.0:
+                            log.warning(f"SHIP SKIPPED {order_name_local}: value GBP {total_value_gbp} exceeds 2500 cap (manual review)")
+                            return
+
+                        log.info(f"SHIP starting {order_name_local} ({region_local})...")
+                        result = ship_order(order_name_local)
+
+                        if result.get("dry_run"):
+                            log.info(f"SHIP [DRY RUN] {order_name_local}: would ship for {result.get('cost')}")
+                        elif result.get("error"):
+                            log.warning(f"SHIP MANUAL REVIEW {order_name_local}: {result.get('error')}")
+                        else:
+                            log.info(f"SHIP DONE {order_name_local} -> {result.get('tracking')} ({result.get('cost')})")
+                    except Exception as ship_err:
+                        log.error(f"SHIP background thread failed for {order_name_local}: {ship_err}")
+                        log.error(traceback.format_exc())
+
+                t = threading.Thread(
+                    target=_ship_in_background,
+                    args=(order_name, routing["region"]),
+                    daemon=False,
+                )
+                t.start()
+                log.info(f"SHIP queued in background for {order_name}")
+            except Exception as e:
+                log.error(f"SHIP failed to queue for {order_name}: {e}")
+                log.error(traceback.format_exc())
+
         return ("ok", 200)
 
     except Exception as e:
