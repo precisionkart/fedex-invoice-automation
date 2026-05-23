@@ -60,6 +60,14 @@ def build_rate_request(shipment, account_number):
         "requestedShipment": {
             "shipper":   shipment["shipper"],
             "recipient": shipment["recipient"],
+            "shippingChargesPayment": {
+                "paymentType": "SENDER",
+                "payor": {
+                    "responsibleParty": {
+                        "accountNumber": {"value": account_number},
+                    }
+                }
+            },
             "preferredCurrency": pkg["currency"],
             "rateRequestType": ["ACCOUNT", "LIST"],
             "pickupType": "DROPOFF_AT_FEDEX_LOCATION",
