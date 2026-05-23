@@ -45,7 +45,7 @@ log = logging.getLogger("ship_real_order")
 SHIPPER = {
     "contact": {
         "personName":  "Precision Kart",
-        "phoneNumber": "+447000000000",   # TODO: real number
+        "phoneNumber": "447914567321",
         "companyName": "Precision Kart",
         "emailAddress": "info@precisionkart.co.uk",
     },
