@@ -261,6 +261,38 @@ def ship_order(order_name):
     doc_id = etd_result.get('output', {}).get('meta', {}).get('docId', 'n/a')
     log.info(f"      ETD docId: {doc_id}")
 
+    # 9b. For US orders, also upload customs declaration via ETD
+    if country == "US":
+        log.info("   8b/9 Uploading customs declaration via ETD...")
+        try:
+            from generate_customs_declaration import (
+                build_line_items as cd_build,
+                group_line_items as cd_group,
+                render_customs_pdf as cd_render,
+            )
+            customs_raw = cd_build(order)
+            customs_grouped = cd_group(customs_raw)
+            customs_path = f"/tmp/Customs_{order_name.lstrip(chr(35))}.pdf"
+            cd_render(order_name.lstrip("#"), customs_grouped, customs_path)
+
+            customs_etd = upload_trade_document(
+                tracking_number=tracking,
+                pdf_path=customs_path,
+                document_type="OTHER",
+                origin_country="GB",
+                destination_country=country,
+            )
+            customs_doc_id = customs_etd.get('output', {}).get('meta', {}).get('docId', 'n/a')
+            log.info(f"      Customs ETD docId: {customs_doc_id}")
+
+            customs_drive = upload_invoice(
+                customs_path,
+                os.getenv("DRIVE_FOLDER_DECLARATIONS") or os.getenv("GOOGLE_DRIVE_FOLDER_ID"),
+            )
+            log.info(f"      Customs Drive: {customs_drive.get('link', 'uploaded')}")
+        except Exception as e:
+            log.error(f"      Customs declaration upload failed (not blocking): {e}")
+
     # 10. Log to Sheet
     log.info("   9/9 Logging to Sheet...")
     log_shipment(
