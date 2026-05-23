@@ -66,10 +66,12 @@ def upload_trade_document(
         ship_date = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
 
     token = get_fedex_token()["token"]
-    # Trade Documents Upload uses a separate "EDU Sandbox" URL, not the main sandbox.
-    # Production is on the main apis.fedex.com host.
-    DOC_SANDBOX = "https://documentapitest.prod.fedex.com/sandbox"
-    DOC_BASE_URL = DOC_SANDBOX if "sandbox" in BASE_URL else "https://apis.fedex.com"
+    # Trade Documents Upload uses a SEPARATE hostname, not the main API host.
+    # Confirmed from FedEx APAC ETD Quick Guide PDF.
+    if "sandbox" in BASE_URL:
+        DOC_BASE_URL = "https://documentapitest.prod.fedex.com/sandbox"
+    else:
+        DOC_BASE_URL = "https://documentapi.prod.fedex.com"
     url = f"{DOC_BASE_URL}/documents/v1/etds/upload"
 
     # Note the exact casing from the FedEx schema:
