@@ -50,10 +50,10 @@ SHIPPER = {
         "emailAddress": "info@precisionkart.co.uk",
     },
     "address": {
-        "streetLines":   ["Hendall Gate Farm"],
+        "streetLines":   ["Unit 2 Pacemanor", "Bellbrook Industrial Estate"],
         "city":          "Uckfield",
         "stateOrProvinceCode": "GB",
-        "postalCode":    "TN225LX",
+        "postalCode":    "TN221YA",
         "countryCode":   "GB",
     },
 }
@@ -212,7 +212,22 @@ def ship_order(order_name):
              f"@ {cheapest['price']} {cheapest['currency']}")
     shipment["service_type"] = cheapest["service_type"]
 
-    # 6. Create shipment
+    # 6. Create shipment (skip if dry-run)
+    dry_run = os.getenv("FEDEX_DRY_RUN", "false").lower() == "true"
+    if dry_run:
+        log.info("   5/9 [DRY RUN] Skipping label creation")
+        log.info(f"      Would ship: {pkg['package_name']} via {cheapest['service_name']}")
+        log.info(f"      Would cost: {cheapest['price']} {cheapest['currency']}")
+        return {
+            "order":    order_name,
+            "tracking": "DRY-RUN-NO-LABEL",
+            "package":  pkg["package_name"],
+            "service":  cheapest["service_name"],
+            "cost":     f"{cheapest['price']} {cheapest['currency']}",
+            "label":    "(dry-run, no label created)",
+            "invoice":  "(dry-run, not generated)",
+            "dry_run":  True,
+        }
     log.info("   5/9 Creating FedEx shipment...")
     ship_result = create_shipment(shipment)
     tracking  = ship_result["tracking_number"]
