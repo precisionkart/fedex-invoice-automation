@@ -239,7 +239,7 @@ def ship_order(order_name):
     label_path = f"{order_name}_label.pdf"
     with open(label_path, "wb") as f:
         f.write(label_pdf)
-    label_drive = upload_invoice(label_path, os.getenv("GOOGLE_DRIVE_FOLDER_ID"))
+    label_drive = upload_invoice(label_path, os.getenv("DRIVE_FOLDER_LABELS") or os.getenv("GOOGLE_DRIVE_FOLDER_ID"))
     log.info(f"      Label: {label_drive.get('link', 'uploaded')}")
 
     # 8. Generate + save invoice
@@ -247,7 +247,7 @@ def ship_order(order_name):
     invoice_path = f"Invoice_{order_name}.pdf"
     invoice, _warnings = build_invoice_from_order(order)
     render_pdf(invoice, invoice_path)
-    invoice_drive = upload_invoice(invoice_path, os.getenv("GOOGLE_DRIVE_FOLDER_ID"))
+    invoice_drive = upload_invoice(invoice_path, os.getenv("DRIVE_FOLDER_INVOICES") or os.getenv("GOOGLE_DRIVE_FOLDER_ID"))
     log.info(f"      Invoice: {invoice_drive.get('link', 'uploaded')}")
 
     # 9. Upload invoice as ETD
