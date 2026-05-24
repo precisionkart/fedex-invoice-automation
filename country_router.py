@@ -47,6 +47,15 @@ EU_COUNTRIES = {
     "SE",  # Sweden
 }
 
+# EFTA + non-EU European countries — ship like EU (commercial invoice only)
+# These are FedEx-served and treated identically to EU for paperwork
+EFTA_COUNTRIES = {
+    "NO",  # Norway
+    "CH",  # Switzerland
+    "IS",  # Iceland
+    "LI",  # Liechtenstein
+}
+
 # US — run automation + needs separate customs declaration PDF
 US_COUNTRIES = {"US"}
 
@@ -97,6 +106,14 @@ def classify_destination(country_code):
             "region":            "US",
             "needs_customs_pdf": True,
             "reason":            "US destination — commercial invoice + customs declaration",
+        }
+
+    if code in EFTA_COUNTRIES:
+        return {
+            "action":            "ship",
+            "region":            "EU",
+            "needs_customs_pdf": False,
+            "reason":            f"EFTA destination ({code}) — commercial invoice only",
         }
 
     return {
