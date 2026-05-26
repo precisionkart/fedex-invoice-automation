@@ -323,16 +323,20 @@ def ship_order(order_name):
     log.info(f"      ✅ Logged")
 
     log.info(f"🎉 Done! {order_name} → {tracking}")
-    # 10. Mark Shopify order fulfilled  --  DISABLED 2026-05-26
-    # Pick/packers mark Shopify Fulfilled manually after physically shipping.
-    # To re-enable: uncomment the block below.
-    log.info("   10/10 Shopify fulfillment skipped (pickers handle manually)")
-    # try:
-    #     from shopify_fulfill import fulfill_order as shopify_fulfill_order
-    #     fulfill_result = shopify_fulfill_order(order_name, tracking)
-    #     log.info(f"      Shopify fulfilled OK")
-    # except Exception as e:
-    #     log.warning(f"      Shopify fulfill failed (not blocking): {e}")
+    # 10. Add tracking note to Shopify order (DOES NOT fulfil)
+    # Pick/packers see this in the order timeline, then manually mark
+    # fulfilled in Shopify after physically shipping.
+    log.info("   10/10 Adding tracking note to Shopify order...")
+    try:
+        from shopify_note import add_order_note
+        note_text = (
+            f"FedEx label created — Tracking: {tracking} "
+            f"({cheapest['service_name']}, {cheapest['price']} {cheapest['currency']})"
+        )
+        add_order_note(order_name, note_text)
+        log.info(f"      Note added to Shopify timeline")
+    except Exception as e:
+        log.warning(f"      Shopify note failed (not blocking): {e}")
 
     return {
         "order":    order_name,
