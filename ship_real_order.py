@@ -323,14 +323,16 @@ def ship_order(order_name):
     log.info(f"      ✅ Logged")
 
     log.info(f"🎉 Done! {order_name} → {tracking}")
-    # 10. Mark Shopify order fulfilled
-    log.info("   10/10 Marking Shopify order fulfilled...")
-    try:
-        from shopify_fulfill import fulfill_order as shopify_fulfill_order
-        fulfill_result = shopify_fulfill_order(order_name, tracking)
-        log.info(f"      Shopify fulfilled OK")
-    except Exception as e:
-        log.warning(f"      Shopify fulfill failed (not blocking): {e}")
+    # 10. Mark Shopify order fulfilled  --  DISABLED 2026-05-26
+    # Pick/packers mark Shopify Fulfilled manually after physically shipping.
+    # To re-enable: uncomment the block below.
+    log.info("   10/10 Shopify fulfillment skipped (pickers handle manually)")
+    # try:
+    #     from shopify_fulfill import fulfill_order as shopify_fulfill_order
+    #     fulfill_result = shopify_fulfill_order(order_name, tracking)
+    #     log.info(f"      Shopify fulfilled OK")
+    # except Exception as e:
+    #     log.warning(f"      Shopify fulfill failed (not blocking): {e}")
 
     return {
         "order":    order_name,
