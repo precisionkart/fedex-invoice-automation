@@ -329,10 +329,15 @@ def ship_order(order_name):
     log.info("   10/10 Adding tracking note to Shopify order...")
     try:
         from shopify_note import add_order_note
-        note_text = (
-            f"FedEx label created — Tracking: {tracking} "
-            f"({cheapest['service_name']}, {cheapest['price']} {cheapest['currency']})"
-        )
+        label_link = label_drive.get("link", "") if label_drive else ""
+        note_lines = [
+            f"FedEx label created — {cheapest['service_name']}, {cheapest['price']} {cheapest['currency']}",
+            "",
+            f"Tracking: {tracking}",
+        ]
+        if label_link:
+            note_lines.append(f"Label: {label_link}")
+        note_text = "\n".join(note_lines)
         add_order_note(order_name, note_text)
         log.info(f"      Note added to Shopify timeline")
     except Exception as e:
