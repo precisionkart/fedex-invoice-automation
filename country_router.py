@@ -59,6 +59,17 @@ EFTA_COUNTRIES = {
 # US — run automation + needs separate customs declaration PDF
 US_COUNTRIES = {"US"}
 
+# Countries where FedEx rates are expensive vs what we charge customers.
+# Route these to manual review even though they're in EU/EFTA sets above,
+# so we can verify shipping margin before booking a label.
+MANUAL_REVIEW_COUNTRIES = {
+    "IE",  # Ireland — EU but island, FedEx pricing high
+    "CH",  # Switzerland — non-EU, EFTA rates
+    "NO",  # Norway — non-EU, EFTA rates
+    "IS",  # Iceland — EFTA, very high rates
+    "LI",  # Liechtenstein — EFTA, same zone as CH
+}
+
 
 def classify_destination(country_code):
     """
@@ -90,6 +101,14 @@ def classify_destination(country_code):
             "region":            "UK",
             "needs_customs_pdf": False,
             "reason":            "UK domestic order — handled manually",
+        }
+
+    if code in MANUAL_REVIEW_COUNTRIES:
+        return {
+            "action":            "manual_review",
+            "region":            "OTHER",
+            "needs_customs_pdf": False,
+            "reason":            f"Destination {code} flagged for manual review (expensive FedEx rates — verify margin first)",
         }
 
     if code in EU_COUNTRIES:
