@@ -187,10 +187,28 @@ def ship_order(order_name):
              f"{pkg['weight_kg']}kg)")
 
     # 4. Build shipment dict for FedEx
-    declared_value = sum(it["unit_value"] * it["quantity"] for it in items)
+    # Group identical line items (same SKU + variant) and round to 2dp
+    grouped = {}
+    for it in items:
+        key = (it.get("sku", ""), it.get("description", ""))
+        if key in grouped:
+            grouped[key]["quantity"] += it["quantity"]
+            grouped[key]["weight_kg"] += it.get("weight_kg", 0) * it["quantity"]
+        else:
+            grouped[key] = dict(it)
+            grouped[key]["weight_kg"] = it.get("weight_kg", 0) * it["quantity"]
+    
+    items = list(grouped.values())
+    
+    # Round unit_value to 2dp to avoid float artifacts
+    for it in items:
+        it["unit_value"] = round(float(it["unit_value"]), 2)
+    
+    declared_value = round(sum(it["unit_value"] * it["quantity"] for it in items), 2)
     shipment = {
         "shipper":   SHIPPER,
         "recipient": build_fedex_recipient(order),
+        "order_name": order_name,
         "package": {
             "weight_kg":      pkg["weight_kg"],
             "length_cm":      pkg["length_cm"],

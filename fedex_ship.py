@@ -143,7 +143,7 @@ def build_ship_request(shipment, account_number):
                             "currency": fedex_currency(li["currency"]),
                         },
                         "customsValue": {
-                            "amount":   li["unit_value"] * li["quantity"],
+                            "amount":   round(li["unit_value"] * li["quantity"], 2),
                             "currency": fedex_currency(li["currency"]),
                         },
                     }
@@ -168,6 +168,12 @@ def build_ship_request(shipment, account_number):
                     "height": pkg["height_cm"],
                     "units":  "CM",
                 },
+                "customerReferences": [
+                    {
+                        "customerReferenceType": "CUSTOMER_REFERENCE",
+                        "value": str(shipment.get("order_name", ""))[:40],
+                    }
+                ] if shipment.get("order_name") else [],
             }],
         },
     }
