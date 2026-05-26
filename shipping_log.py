@@ -33,6 +33,10 @@ COL_LAST_EVENT    = "F"
 COL_MARK_PACKED   = "G"
 COL_LABEL_LINK    = "H"
 COL_INVOICE_LINK  = "I"
+COL_SERVICE       = "J"
+COL_OUR_COST      = "K"
+COL_CUSTOMER_PAID = "L"
+COL_DIFFERENCE    = "M"
 
 
 def _get_service():
@@ -41,13 +45,25 @@ def _get_service():
 
 
 def log_shipment(order_name, tracking_number, country,
-                 label_drive_link="", invoice_drive_link=""):
+                 label_drive_link="", invoice_drive_link="",
+                 service_name="", our_cost_gbp=None,
+                 customer_paid_gbp=None):
     """Append a new row when a shipment is created."""
     if not SHEET_ID:
         raise RuntimeError("Missing SHIPPING_LOG_SHEET_ID in .env")
 
     service = _get_service()
     now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+
+    # First find the next empty row number, so we can build a formula for M (Difference)
+    sheet_meta = service.spreadsheets().values().get(
+        spreadsheetId=SHEET_ID,
+        range=f"{SHEET_NAME}!A:A",
+    ).execute()
+    next_row = len(sheet_meta.get("values", [])) + 1
+
+    diff_formula = f"=L{next_row}-K{next_row}"
+
     row = [[
         order_name,
         tracking_number,
@@ -58,10 +74,14 @@ def log_shipment(order_name, tracking_number, country,
         False,
         label_drive_link,
         invoice_drive_link,
+        service_name,
+        our_cost_gbp if our_cost_gbp is not None else "",
+        customer_paid_gbp if customer_paid_gbp is not None else "",
+        diff_formula,
     ]]
     return service.spreadsheets().values().append(
         spreadsheetId=SHEET_ID,
-        range=f"{SHEET_NAME}!A:I",
+        range=f"{SHEET_NAME}!A:M",
         valueInputOption="USER_ENTERED",
         insertDataOption="INSERT_ROWS",
         body={"values": row},

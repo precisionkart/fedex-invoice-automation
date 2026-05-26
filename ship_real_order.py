@@ -160,6 +160,51 @@ def build_fedex_recipient(order):
     }
 
 
+def dry_quote_only(order_name):
+    """
+    Quick FedEx rate lookup for an order — no label created.
+    Used by backfill script to fill in 'Our Cost' for historic shipments.
+    Returns (cheapest_price_gbp, service_name) or (None, "REASON").
+    """
+    try:
+        token = get_access_token()
+        order = fetch_order(token, order_name)
+        if not order:
+            return None, "ORDER_NOT_FOUND"
+
+        items = extract_items(order)
+        if not items:
+            return None, "NO_ITEMS"
+
+        pkg = choose_package(items)
+        if pkg.get("manual_review"):
+            return None, "MANUAL_REVIEW"
+
+        shipment = {
+            "shipper":   SHIPPER,
+            "recipient": build_fedex_recipient(order),
+            "package": {
+                "weight_kg":      pkg["weight_kg"],
+                "length_cm":      pkg["length_cm"],
+                "width_cm":       pkg["width_cm"],
+                "height_cm":      pkg["height_cm"],
+                "currency":       "GBP",
+                "declared_value": 50.0,
+            },
+        }
+        rates = get_rates(shipment)
+        if not rates:
+            return None, "NO_RATES"
+
+        cheapest = min(rates, key=lambda r: r["price"])
+        if cheapest.get("currency") != "GBP":
+            return None, "NON_GBP"
+
+        return round(float(cheapest["price"]), 2), cheapest.get("service_name", "")
+    except Exception as e:
+        return None, f"ERROR: {e}"
+
+
 def ship_order(order_name):
     """End-to-end pipeline for one order."""
     log.info(f"🚀 Shipping order {order_name}")
@@ -313,14 +358,37 @@ def ship_order(order_name):
 
     # 10. Log to Sheet
     log.info("   9/9 Logging to Sheet...")
+
+    # Pull what the customer paid for shipping (Shopify GBP)
+    customer_paid_gbp = None
+    try:
+        sl = order.get("shippingLine") or {}
+        sp_set = sl.get("originalPriceSet") or {}
+        sp_money = sp_set.get("shopMoney") or {}
+        if sp_money.get("amount"):
+            customer_paid_gbp = float(sp_money["amount"])
+    except Exception:
+        customer_paid_gbp = None
+
+    # Our cost in GBP (from cheapest FedEx rate quote)
+    our_cost_gbp = None
+    try:
+        if cheapest.get("currency") == "GBP":
+            our_cost_gbp = float(cheapest.get("price", 0))
+    except Exception:
+        our_cost_gbp = None
+
     log_shipment(
         order_name=order_name,
         tracking_number=tracking,
         country=country,
         label_drive_link=label_drive.get("link", ""),
         invoice_drive_link=invoice_drive.get("link", ""),
+        service_name=cheapest.get("service_name", ""),
+        our_cost_gbp=our_cost_gbp,
+        customer_paid_gbp=customer_paid_gbp,
     )
-    log.info(f"      ✅ Logged")
+    log.info(f"      ✅ Logged (cost £{our_cost_gbp}, customer paid £{customer_paid_gbp})")
 
     log.info(f"🎉 Done! {order_name} → {tracking}")
     # 10. Add tracking note to Shopify order (DOES NOT fulfil)
