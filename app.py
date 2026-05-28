@@ -208,6 +208,13 @@ def orders_webhook():
         if routing["action"] == "ship":
             try:
                 import threading
+                from shopify_dedup import claim_order, mark_shipped, release_claim
+
+                # DEDUP GATE: Shopify can fire orders/paid more than once.
+                # Claim via Shopify tag before shipping; skip if already claimed.
+                if not claim_order(order_name):
+                    log.info(f"SHIP SKIPPED {order_name} - already claimed (duplicate webhook)")
+                    return ("ok", 200)
 
                 def _ship_in_background(order_name_local, region_local):
                     try:
@@ -229,9 +236,17 @@ def orders_webhook():
                             log.warning(f"SHIP MANUAL REVIEW {order_name_local}: {result.get('error')}")
                         else:
                             log.info(f"SHIP DONE {order_name_local} -> {result.get('tracking')} ({result.get('cost')})")
+                            try:
+                                mark_shipped(order_name_local)
+                            except Exception as tag_err:
+                                log.error(f"DEDUP: mark_shipped failed for {order_name_local}: {tag_err}")
                     except Exception as ship_err:
                         log.error(f"SHIP background thread failed for {order_name_local}: {ship_err}")
                         log.error(traceback.format_exc())
+                        try:
+                            release_claim(order_name_local)
+                        except Exception as rel_err:
+                            log.error(f"DEDUP: release_claim failed for {order_name_local}: {rel_err}")
 
                 t = threading.Thread(
                     target=_ship_in_background,
