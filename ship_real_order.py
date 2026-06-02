@@ -292,6 +292,25 @@ def ship_order(order_name):
             "dry_run":  True,
         }
     log.info("   5/9 Creating FedEx shipment...")
+    # CUSTOMS FLOOR: FedEx rejects shipments where declared customs value
+    # is less than the shipping cost (TOTALCARRIAGEVALUE.EXCEEDS.CUSTOMSVALUE).
+    # Scale up unit_value proportionally so total customs >= shipping_cost + 1.
+    try:
+        line_items = shipment.get("line_items") or []
+        if line_items:
+            current_total = sum((li.get("unit_value") or 0) * (li.get("quantity") or 0) for li in line_items)
+            shipping_cost = float(cheapest.get("price") or 0)
+            min_required = shipping_cost + 1.0
+            if current_total < min_required and current_total > 0:
+                scale = min_required / current_total
+                for li in line_items:
+                    li["unit_value"] = round((li.get("unit_value") or 0) * scale, 2)
+                log.info(f"      CUSTOMS FLOOR: declared GBP{current_total:.2f} < shipping GBP{shipping_cost:.2f}, scaled x{scale:.3f} to clear")
+            elif current_total == 0:
+                log.warning(f"      CUSTOMS FLOOR: declared total is 0, cannot scale - shipment may fail")
+    except Exception as floor_err:
+        log.error(f"      CUSTOMS FLOOR error: {floor_err}")
+
     ship_result = create_shipment(shipment)
     tracking  = ship_result["tracking_number"]
     label_pdf = ship_result["label_pdf"]   # raw bytes, already decoded
