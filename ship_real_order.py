@@ -275,6 +275,40 @@ def ship_order(order_name):
              f"@ {cheapest['price']} {cheapest['currency']}")
     shipment["service_type"] = cheapest["service_type"]
 
+    # COST DISPARITY GUARD: skip auto-shipping if FedEx cost is way over
+    # what the customer paid. Two triggers (either bails to manual review):
+    #   1. FedEx cost > customer_paid * 1.15 (15% over)
+    #   2. FedEx cost > customer_paid + 5.00 (fixed margin)
+    customer_paid_gbp = None
+    try:
+        sl = order.get("shippingLine") or {}
+        sp_money = (sl.get("originalPriceSet") or {}).get("shopMoney") or {}
+        if sp_money.get("amount"):
+            customer_paid_gbp = float(sp_money["amount"])
+    except Exception:
+        customer_paid_gbp = None
+
+    fedex_cost = float(cheapest.get("price") or 0)
+    if customer_paid_gbp is not None and customer_paid_gbp > 0:
+        threshold_pct = customer_paid_gbp * 1.15
+        threshold_abs = customer_paid_gbp + 5.0
+        if fedex_cost > threshold_pct or fedex_cost > threshold_abs:
+            pct_over = (fedex_cost / customer_paid_gbp - 1) * 100
+            reason = (
+                f"Manual Review: Shipping Discrepancy too large "
+                f"(customer paid GBP{customer_paid_gbp:.2f}, "
+                f"FedEx wants GBP{fedex_cost:.2f}, "
+                f"+{pct_over:.1f}%)"
+            )
+            log.warning(f"      {reason}")
+            try:
+                from shopify_note import add_order_note
+                add_order_note(order_name, reason)
+                log.info(f"      Shopify note added for manual review")
+            except Exception as note_err:
+                log.error(f"      Failed to add Shopify note: {note_err}")
+            return {"error": "manual_review_cost", "details": reason}
+
     # 6. Create shipment (skip if dry-run)
     dry_run = os.getenv("FEDEX_DRY_RUN", "false").lower() == "true"
     if dry_run:
