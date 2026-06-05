@@ -120,12 +120,7 @@ def build_ship_request(shipment, account_number):
             },
             "customsClearanceDetail": {
                 "dutiesPayment": {
-                    "paymentType": "SENDER",
-                    "payor": {
-                        "responsibleParty": {
-                            "accountNumber": {"value": account_number},
-                        },
-                    },
+                    "paymentType": "RECIPIENT",
                 },
                 "commodities": [
                     {
