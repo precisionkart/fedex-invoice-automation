@@ -41,6 +41,26 @@ logging.basicConfig(level=logging.INFO,
 log = logging.getLogger("ship_real_order")
 
 
+def _post_failure_note(order_name, reason):
+    """Post a manual-review/failure note to the Shopify order timeline.
+
+    Best-effort: never raises (logs a warning instead) and is skipped during
+    dry-run. For failure/manual-review paths only — success notes are posted
+    inline by ship_order().
+    """
+    if os.getenv("FEDEX_DRY_RUN", "false").lower() == "true":
+        return
+    try:
+        from shopify_note import add_order_note
+        add_order_note(
+            order_name,
+            f"❌ Auto-ship failed — manual review needed. Reason: {reason}",
+        )
+        log.info("      Shopify failure note added")
+    except Exception as note_err:
+        log.warning(f"      Failed to add Shopify failure note: {note_err}")
+
+
 # Your shipper address (Precision Kart)
 SHIPPER = {
     "contact": {
@@ -226,6 +246,7 @@ def ship_order(order_name):
     pkg = choose_package(items)
     if pkg.get("manual_review"):
         log.warning(f"      ⚠️  Manual review: {pkg.get('reason')}")
+        _post_failure_note(order_name, pkg["reason"])
         return {"error": "manual_review", "details": pkg}
     log.info(f"      Selected: {pkg['package_name']} "
              f"({pkg['length_cm']}×{pkg['width_cm']}×{pkg['height_cm']}cm, "
@@ -269,6 +290,7 @@ def ship_order(order_name):
     log.info("   4/9 Fetching FedEx rates...")
     rates = get_rates(shipment)
     if not rates:
+        _post_failure_note(order_name, "No rates returned")
         return {"error": "No rates returned"}
     cheapest = rates[0]   # already sorted by price ascending
     log.info(f"      Cheapest: {cheapest['service_name']} "

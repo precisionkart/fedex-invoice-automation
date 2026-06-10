@@ -51,6 +51,26 @@ log = logging.getLogger(__name__)
 app = Flask(__name__)
 
 
+def _post_failure_note(order_name, reason):
+    """Post a manual-review/failure note to the Shopify order timeline.
+
+    Best-effort: never raises (logs a warning instead) and is skipped during
+    dry-run. For failure/manual-review paths only — success notes are posted
+    by ship_real_order.ship_order().
+    """
+    if os.getenv("FEDEX_DRY_RUN", "false").lower() == "true":
+        return
+    try:
+        from shopify_note import add_order_note
+        add_order_note(
+            order_name,
+            f"❌ Auto-ship failed — manual review needed. Reason: {reason}",
+        )
+        log.info(f"Shopify failure note added for {order_name}")
+    except Exception as note_err:
+        log.warning(f"Failed to add Shopify failure note for {order_name}: {note_err}")
+
+
 def verify_shopify_hmac(body_bytes, signature_header):
     """Verify the request really came from Shopify."""
     if not WEBHOOK_SECRET:
@@ -127,6 +147,7 @@ def orders_webhook():
 
         if routing["action"] == "manual_review":
             log.warning(f"⚠️  Order {order_name} needs manual review — {routing['reason']}")
+            _post_failure_note(order_name, routing["reason"])
             return ("manual_review", 200)
 
         # If we got here, action == "ship" (EU or US)
@@ -225,6 +246,7 @@ def orders_webhook():
                         total_value_gbp = float(invoice.get("total") or 0)
                         if total_value_gbp > 2500.0:
                             log.warning(f"SHIP SKIPPED {order_name_local}: value GBP {total_value_gbp} exceeds 2500 cap (manual review)")
+                            _post_failure_note(order_name_local, f"value GBP {total_value_gbp} exceeds 2500 cap")
                             return
 
                         log.info(f"SHIP starting {order_name_local} ({region_local})...")
