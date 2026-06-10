@@ -29,7 +29,7 @@ PACKAGES = [
     ("M3 Box Envelope",    32,   21,    8,    60,  False),
     ("XX-Large Box",       26,   26,   10,   136,  False),
     ("Chain Lube Box",     26,   21,   21,   100,  False),
-    ("3XL Shoebox",        40,   25.5, 15,   150,  False),
+    ("3XL Shoebox",        40,   27,   15,   150,  False),
 ]
 
 
