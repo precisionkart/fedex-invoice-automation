@@ -397,62 +397,33 @@ def ship_order(order_name):
             "dry_run":  True,
         }
     log.info("   5/9 Creating FedEx shipment...")
-    # CUSTOMS FLOOR: FedEx rejects shipments where declared customs value
-    # is less than the shipping cost (TOTALCARRIAGEVALUE.EXCEEDS.CUSTOMSVALUE).
-    # Scale up unit_value proportionally so total customs >= shipping_cost + 1.
+    # DECLARED VALUE: send the TRUE declared customs value as-is. We previously
+    # scaled it up to clear the shipping cost, but FedEx validates declared
+    # customs value against actual goods value and rejected the scaled "fake"
+    # value as a misleading CURRENCY.TYPE.INVALID. totalDeclaredValue is for
+    # declared customs value, not freight — a value below the shipping cost is
+    # fine; FedEx ships low-value items every day. unitPrice / customsValue /
+    # totalDeclaredValue are all derived from the actual order values in
+    # build_ship_request (customsValue = round(unitPrice * quantity, 2)).
     try:
         line_items = shipment.get("line_items") or []
         if line_items:
             shipping_cost = float(cheapest.get("price") or 0)
-            # Work entirely in 2dp customs values; derive unitPrice FROM the
-            # rounded customsValue so unitPrice * quantity == customsValue
-            # exactly (FedEx does internal arithmetic and rejects mismatches as
-            # a misleading CURRENCY.TYPE.INVALID).
-            orig_total = round(
+            declared_total = round(
                 sum(round((li.get("unit_value") or 0) * (li.get("quantity") or 0), 2)
                     for li in line_items),
                 2,
             )
-            min_required = shipping_cost + 1.0  # small headroom buffer
-
-            if orig_total > 0 and orig_total < min_required:
-                scale = min_required / orig_total
-                for li in line_items:
-                    qty = li.get("quantity") or 1
-                    orig_cv = round((li.get("unit_value") or 0) * qty, 2)
-                    target_cv = round(orig_cv * scale, 2)            # scaled target
-                    unit_price = round(target_cv / qty, 2)           # derive unitPrice from it
-                    customs_value = round(unit_price * qty, 2)       # exact: unit * qty
-                    li["unit_value"] = unit_price
-                    li["customs_value"] = customs_value
-
-                # totalDeclaredValue is the SUM of the rounded customsValues.
-                new_total = round(sum(li["customs_value"] for li in line_items), 2)
-
-                # Self-correcting: rounding may leave the sum just under the
-                # shipping cost. Bump the highest-value commodity by 1p (which
-                # keeps unitPrice * qty == customsValue) until the declared
-                # total clears the shipping cost.
-                guard = 0
-                while new_total < shipping_cost and guard < 1000:
-                    hi = max(line_items, key=lambda l: l.get("customs_value", 0))
-                    qty = hi.get("quantity") or 1
-                    hi["unit_value"] = round(hi["unit_value"] + 0.01, 2)
-                    hi["customs_value"] = round(hi["unit_value"] * qty, 2)
-                    new_total = round(sum(li["customs_value"] for li in line_items), 2)
-                    guard += 1
-
-                log.info(f"      CUSTOMS FLOOR: declared GBP{orig_total:.2f} < shipping GBP{shipping_cost:.2f}, "
-                         f"scaled to GBP{new_total:.2f} (x{scale:.3f})")
+            if declared_total > 0 and declared_total < shipping_cost:
+                log.info(f"      Declared value GBP{declared_total:.2f} is below shipping "
+                         f"GBP{shipping_cost:.2f} — sending true declared value (no scaling)")
                 _post_order_note(
                     order_name,
-                    f"⚠️ Manual review needed — Customs value was £{orig_total:.2f} "
-                    f"but shipping cost was £{shipping_cost:.2f}. Please ship manually."
+                    f"ℹ️ Note: Order value £{declared_total:.2f} is below shipping cost "
+                    f"£{shipping_cost:.2f}. Sending true declared value."
                 )
-            elif orig_total == 0:
-                log.warning(f"      CUSTOMS FLOOR: declared total is 0, cannot scale - shipment may fail")
-    except Exception as floor_err:
-        log.error(f"      CUSTOMS FLOOR error: {floor_err}")
+    except Exception as declared_err:
+        log.error(f"      Declared-value check error: {declared_err}")
 
     try:
         ship_result = create_shipment(shipment)
