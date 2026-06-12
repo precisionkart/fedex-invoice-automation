@@ -23,9 +23,9 @@ load_dotenv()
 ACCOUNT_NUMBER = os.getenv("FEDEX_ACCOUNT_NUMBER")
 
 
-# FedEx uses non-standard currency codes in the Ship API
+# FedEx uses non-standard currency codes in the Ship API.
+# NOTE: GBP is just "GBP" — "UKL" is NOT a valid code and FedEx rejects it.
 FEDEX_CURRENCY = {
-    "GBP": "UKL",
     "CAD": "CDN",
 }
 
@@ -87,7 +87,14 @@ TEST_SHIPMENT = {
 def build_ship_request(shipment, account_number):
     """Construct the JSON body FedEx expects to create a shipment."""
     pkg = shipment["package"]
-    total_declared = sum(li["unit_value"] * li["quantity"] for li in shipment["line_items"])
+    # Round each commodity's customs value to 2dp first, then sum — so
+    # totalDeclaredValue exactly equals the sum of the per-commodity
+    # customsValue amounts (FedEx rejects TOTALCARRIAGEVALUE.EXCEEDS.CUSTOMSVALUE
+    # on float artifacts like 14.100000000000001 vs 14.1).
+    total_declared = round(
+        sum(round(li["unit_value"] * li["quantity"], 2) for li in shipment["line_items"]),
+        2,
+    )
     primary_currency = shipment["line_items"][0]["currency"]
 
     return {
