@@ -42,24 +42,77 @@ logging.basicConfig(level=logging.INFO,
 log = logging.getLogger("ship_real_order")
 
 
-def _post_failure_note(order_name, reason):
-    """Post a manual-review/failure note to the Shopify order timeline.
+def _post_order_note(order_name, note_text):
+    """Post an arbitrary note (info or failure) to the Shopify order timeline.
 
     Best-effort: never raises (logs a warning instead) and is skipped during
-    dry-run. For failure/manual-review paths only — success notes are posted
-    inline by ship_order().
+    dry-run. Posts note_text verbatim so callers control the exact wording.
     """
     if os.getenv("FEDEX_DRY_RUN", "false").lower() == "true":
         return
     try:
         from shopify_note import add_order_note
-        add_order_note(
-            order_name,
-            f"❌ Auto-ship failed — manual review needed. Reason: {reason}",
-        )
-        log.info("      Shopify failure note added")
+        add_order_note(order_name, note_text)
+        log.info("      Shopify note added")
     except Exception as note_err:
-        log.warning(f"      Failed to add Shopify failure note: {note_err}")
+        log.warning(f"      Failed to add Shopify note: {note_err}")
+
+
+def _post_failure_note(order_name, reason):
+    """Post a manual-review/failure note to the Shopify order timeline.
+
+    Best-effort: never raises and is skipped during dry-run. For the existing
+    manual-review exits (package picker, no rates, cost guard, country routing).
+    """
+    _post_order_note(
+        order_name,
+        f"❌ Auto-ship failed — manual review needed. Reason: {reason}",
+    )
+
+
+def _plain_english_fedex_failure(status_code, codes, messages, tx_id):
+    """Map a FedEx Ship API error to a plain-English ops-facing note.
+
+    Best-effort detection from the error codes/messages; falls back to a
+    generic message. Always starts with "⚠️ Manual review needed" so the
+    notes are visually distinct and grep-able.
+    """
+    codes_upper = (codes or "").upper()
+    blob = f"{codes_upper} {(messages or '').upper()}"
+
+    # 5xx / unreachable — no status_code or server-side error
+    if status_code is None or status_code >= 500:
+        return (
+            "⚠️ Manual review needed — FedEx servers are unreachable right now. "
+            "Will need to retry the shipment later or ship manually."
+        )
+
+    # Customs value below shipping cost
+    if "TOTALCARRIAGEVALUE.EXCEEDS.CUSTOMSVALUE" in codes_upper:
+        return (
+            "⚠️ Manual review needed — FedEx rejected this shipment because the "
+            "order value was below the shipping cost. The system tried to scale "
+            "it up but it didn't satisfy FedEx's customs requirements. Worth "
+            "raising the product price or shipping manually via fedex.com."
+        )
+
+    # Product/commodity data issue: HS code, or currency error tied to a commodity
+    if "HARMONIZED.CODE.INVALID" in codes_upper or (
+        "CURRENCY.TYPE.INVALID" in codes_upper and "COMMODITY_INDEX" in blob
+    ):
+        return (
+            "⚠️ Manual review needed — FedEx rejected this shipment due to a "
+            "product information issue (likely the HS code or country of origin "
+            "metafield). Check the product's fedex_hs_code and "
+            "fedex_country_of_origin metafields in Shopify admin."
+        )
+
+    # Generic 4xx fallback
+    return (
+        "⚠️ Manual review needed — FedEx rejected this shipment. "
+        f"Error code(s): {codes or 'unknown'}. Please ship manually via "
+        f"fedex.com or check FedEx support with transaction ID {tx_id or 'n/a'}."
+    )
 
 
 # Your shipper address (Precision Kart)
@@ -362,7 +415,15 @@ def ship_order(order_name):
                 scale = min_required / current_total
                 for li in line_items:
                     li["unit_value"] = round((li.get("unit_value") or 0) * scale, 2)
+                new_declared = round(sum((li.get("unit_value") or 0) * (li.get("quantity") or 0) for li in line_items), 2)
                 log.info(f"      CUSTOMS FLOOR: declared GBP{current_total:.2f} < shipping GBP{shipping_cost:.2f}, scaled x{scale:.3f} to clear")
+                _post_order_note(
+                    order_name,
+                    f"⚠️ Manual review needed — Customs value was £{current_total:.2f} "
+                    f"but shipping cost was £{shipping_cost:.2f}, so we had to bump the "
+                    f"declared value up to £{new_declared:.2f} to satisfy FedEx. "
+                    f"Worth checking if the product price needs updating."
+                )
             elif current_total == 0:
                 log.warning(f"      CUSTOMS FLOOR: declared total is 0, cannot scale - shipment may fail")
     except Exception as floor_err:
@@ -376,32 +437,23 @@ def ship_order(order_name):
         # the crash + stack trace to stay visible, just not silent.
         resp = http_err.response
         status_code = getattr(resp, "status_code", None)
-        codes, tx_id = "", ""
+        codes, messages, tx_id = "", "", ""
         try:
             body = resp.json() if resp is not None else {}
             errors = body.get("errors") or []
             codes = ", ".join(e.get("code", "") for e in errors if e.get("code"))
+            messages = " ".join(e.get("message", "") for e in errors if e.get("message"))
             tx_id = body.get("transactionId", "")
         except Exception:
             pass  # non-JSON body (e.g. 503 HTML) — fall through to generic message
 
-        if status_code is not None and 400 <= status_code < 500 and codes:
-            reason = (
-                f"FedEx rejected the shipment. Error(s): {codes}. "
-                f"TransactionId: {tx_id}."
-            )
-        else:
-            reason = (
-                f"FedEx API unreachable ({status_code}). Will need manual retry."
-            )
-        _post_failure_note(order_name, reason)
+        note = _plain_english_fedex_failure(status_code, codes, messages, tx_id)
+        _post_order_note(order_name, note)
         raise  # re-raise the original HTTPError — keep the crash + stack trace
     except requests.exceptions.RequestException as conn_err:
         # Connection-level failure (DNS, timeout, refused) — no HTTP response.
-        _post_failure_note(
-            order_name,
-            "FedEx API unreachable (connection error). Will need manual retry.",
-        )
+        note = _plain_english_fedex_failure(None, "", "", "")
+        _post_order_note(order_name, note)
         raise
 
     tracking  = ship_result["tracking_number"]

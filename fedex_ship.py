@@ -138,7 +138,7 @@ def build_ship_request(shipment, account_number):
                         "quantityUnits":   "PCS",
                         "weight": {
                             "units": "KG",
-                            "value": li["weight_kg"],
+                            "value": round(li["weight_kg"], 3),
                         },
                         "unitPrice": {
                             "amount":   li["unit_value"],
@@ -162,7 +162,7 @@ def build_ship_request(shipment, account_number):
             "requestedPackageLineItems": [{
                 "weight": {
                     "units": "KG",
-                    "value": pkg["weight_kg"],
+                    "value": round(pkg["weight_kg"], 3),
                 },
                 "dimensions": {
                     "length": pkg["length_cm"],
