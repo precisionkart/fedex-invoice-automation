@@ -403,20 +403,53 @@ def ship_order(order_name):
     try:
         line_items = shipment.get("line_items") or []
         if line_items:
-            current_total = sum((li.get("unit_value") or 0) * (li.get("quantity") or 0) for li in line_items)
             shipping_cost = float(cheapest.get("price") or 0)
-            min_required = shipping_cost + 1.0
-            if current_total < min_required and current_total > 0:
-                scale = min_required / current_total
+            # Work entirely in 2dp customs values; derive unitPrice FROM the
+            # rounded customsValue so unitPrice * quantity == customsValue
+            # exactly (FedEx does internal arithmetic and rejects mismatches as
+            # a misleading CURRENCY.TYPE.INVALID).
+            orig_total = round(
+                sum(round((li.get("unit_value") or 0) * (li.get("quantity") or 0), 2)
+                    for li in line_items),
+                2,
+            )
+            min_required = shipping_cost + 1.0  # small headroom buffer
+
+            if orig_total > 0 and orig_total < min_required:
+                scale = min_required / orig_total
                 for li in line_items:
-                    li["unit_value"] = round((li.get("unit_value") or 0) * scale, 2)
-                log.info(f"      CUSTOMS FLOOR: declared GBP{current_total:.2f} < shipping GBP{shipping_cost:.2f}, scaled x{scale:.3f} to clear")
+                    qty = li.get("quantity") or 1
+                    orig_cv = round((li.get("unit_value") or 0) * qty, 2)
+                    target_cv = round(orig_cv * scale, 2)            # scaled target
+                    unit_price = round(target_cv / qty, 2)           # derive unitPrice from it
+                    customs_value = round(unit_price * qty, 2)       # exact: unit * qty
+                    li["unit_value"] = unit_price
+                    li["customs_value"] = customs_value
+
+                # totalDeclaredValue is the SUM of the rounded customsValues.
+                new_total = round(sum(li["customs_value"] for li in line_items), 2)
+
+                # Self-correcting: rounding may leave the sum just under the
+                # shipping cost. Bump the highest-value commodity by 1p (which
+                # keeps unitPrice * qty == customsValue) until the declared
+                # total clears the shipping cost.
+                guard = 0
+                while new_total < shipping_cost and guard < 1000:
+                    hi = max(line_items, key=lambda l: l.get("customs_value", 0))
+                    qty = hi.get("quantity") or 1
+                    hi["unit_value"] = round(hi["unit_value"] + 0.01, 2)
+                    hi["customs_value"] = round(hi["unit_value"] * qty, 2)
+                    new_total = round(sum(li["customs_value"] for li in line_items), 2)
+                    guard += 1
+
+                log.info(f"      CUSTOMS FLOOR: declared GBP{orig_total:.2f} < shipping GBP{shipping_cost:.2f}, "
+                         f"scaled to GBP{new_total:.2f} (x{scale:.3f})")
                 _post_order_note(
                     order_name,
-                    f"⚠️ Manual review needed — Customs value was £{current_total:.2f} "
+                    f"⚠️ Manual review needed — Customs value was £{orig_total:.2f} "
                     f"but shipping cost was £{shipping_cost:.2f}. Please ship manually."
                 )
-            elif current_total == 0:
+            elif orig_total == 0:
                 log.warning(f"      CUSTOMS FLOOR: declared total is 0, cannot scale - shipment may fail")
     except Exception as floor_err:
         log.error(f"      CUSTOMS FLOOR error: {floor_err}")

@@ -87,14 +87,20 @@ TEST_SHIPMENT = {
 def build_ship_request(shipment, account_number):
     """Construct the JSON body FedEx expects to create a shipment."""
     pkg = shipment["package"]
-    # Round each commodity's customs value to 2dp first, then sum — so
-    # totalDeclaredValue exactly equals the sum of the per-commodity
-    # customsValue amounts (FedEx rejects TOTALCARRIAGEVALUE.EXCEEDS.CUSTOMSVALUE
-    # on float artifacts like 14.100000000000001 vs 14.1).
-    total_declared = round(
-        sum(round(li["unit_value"] * li["quantity"], 2) for li in shipment["line_items"]),
-        2,
-    )
+
+    def _customs_value(li):
+        # customsValue is the source of truth. When the customs-floor logic
+        # scales an order it sets an explicit "customs_value" (and derives
+        # unitPrice from it); otherwise it's unitPrice * quantity. Always 2dp so
+        # totalDeclaredValue == sum of customsValues exactly (FedEx rejects
+        # TOTALCARRIAGEVALUE.EXCEEDS.CUSTOMSVALUE on mismatched totals).
+        if li.get("customs_value") is not None:
+            return round(li["customs_value"], 2)
+        return round(li["unit_value"] * li["quantity"], 2)
+
+    # totalDeclaredValue = sum of the per-commodity customsValues (not a
+    # separately recomputed scale), so the two can never disagree.
+    total_declared = round(sum(_customs_value(li) for li in shipment["line_items"]), 2)
     primary_currency = shipment["line_items"][0]["currency"]
 
     return {
@@ -145,7 +151,7 @@ def build_ship_request(shipment, account_number):
                             "currency": fedex_currency(li["currency"]),
                         },
                         "customsValue": {
-                            "amount":   round(li["unit_value"] * li["quantity"], 2),
+                            "amount":   _customs_value(li),
                             "currency": fedex_currency(li["currency"]),
                         },
                     }
