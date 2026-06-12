@@ -20,6 +20,7 @@ import os
 import sys
 import logging
 import base64
+import requests
 from dotenv import load_dotenv
 
 from generate_invoice import (
@@ -367,7 +368,42 @@ def ship_order(order_name):
     except Exception as floor_err:
         log.error(f"      CUSTOMS FLOOR error: {floor_err}")
 
-    ship_result = create_shipment(shipment)
+    try:
+        ship_result = create_shipment(shipment)
+    except requests.exceptions.HTTPError as http_err:
+        # FedEx Ship API returned an HTTP error. Record a failure note on the
+        # Shopify order (so there's a paper trail) BEFORE re-raising — we want
+        # the crash + stack trace to stay visible, just not silent.
+        resp = http_err.response
+        status_code = getattr(resp, "status_code", None)
+        codes, tx_id = "", ""
+        try:
+            body = resp.json() if resp is not None else {}
+            errors = body.get("errors") or []
+            codes = ", ".join(e.get("code", "") for e in errors if e.get("code"))
+            tx_id = body.get("transactionId", "")
+        except Exception:
+            pass  # non-JSON body (e.g. 503 HTML) — fall through to generic message
+
+        if status_code is not None and 400 <= status_code < 500 and codes:
+            reason = (
+                f"FedEx rejected the shipment. Error(s): {codes}. "
+                f"TransactionId: {tx_id}."
+            )
+        else:
+            reason = (
+                f"FedEx API unreachable ({status_code}). Will need manual retry."
+            )
+        _post_failure_note(order_name, reason)
+        raise  # re-raise the original HTTPError — keep the crash + stack trace
+    except requests.exceptions.RequestException as conn_err:
+        # Connection-level failure (DNS, timeout, refused) — no HTTP response.
+        _post_failure_note(
+            order_name,
+            "FedEx API unreachable (connection error). Will need manual retry.",
+        )
+        raise
+
     tracking  = ship_result["tracking_number"]
     label_pdf = ship_result["label_pdf"]   # raw bytes, already decoded
     duties_payment_type = ship_result.get("duties_payment_type")  # SENDER=DDP, RECIPIENT=DDU
