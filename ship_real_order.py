@@ -370,6 +370,7 @@ def ship_order(order_name):
     ship_result = create_shipment(shipment)
     tracking  = ship_result["tracking_number"]
     label_pdf = ship_result["label_pdf"]   # raw bytes, already decoded
+    duties_payment_type = ship_result.get("duties_payment_type")  # SENDER=DDP, RECIPIENT=DDU
     log.info(f"      Tracking: {tracking}")
 
     # 7. Save label PDF to Drive
@@ -473,10 +474,21 @@ def ship_order(order_name):
     try:
         from shopify_note import add_order_note
         label_link = label_drive.get("link", "") if label_drive else ""
+        # Duty status — derived from the actual dutiesPayment.paymentType sent
+        # to FedEx, so it stays accurate even if the duty logic changes again.
+        if country == "GB":
+            duty_line = "Duty: N/A (UK domestic)"
+        elif duties_payment_type == "RECIPIENT":
+            duty_line = "Duty: DDU — customer pays duties & taxes on delivery"
+        elif duties_payment_type == "SENDER":
+            duty_line = "Duty: DDP — Precision paid duties & taxes"
+        else:
+            duty_line = f"Duty: unknown (FedEx paymentType={duties_payment_type})"
         note_lines = [
             f"FedEx label created — {cheapest['service_name']}, {cheapest['price']} {cheapest['currency']}",
             "",
             f"Tracking: {tracking}",
+            duty_line,
         ]
         if label_link:
             note_lines.append(f"Label: {label_link}")

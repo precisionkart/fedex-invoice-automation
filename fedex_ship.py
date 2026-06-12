@@ -225,6 +225,12 @@ def create_shipment(shipment):
         "label_pdf":       label_pdf,
         "service_used":    tx.get("serviceType"),
         "ship_date":       body["requestedShipment"]["shipDatestamp"],
+        # The actual duties paymentType sent to FedEx (SENDER=DDP, RECIPIENT=DDU).
+        # Read from the request body so it stays accurate if the code changes.
+        "duties_payment_type": body["requestedShipment"]
+            .get("customsClearanceDetail", {})
+            .get("dutiesPayment", {})
+            .get("paymentType"),
     }
 
 
