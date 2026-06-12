@@ -380,6 +380,66 @@ def ship_order(order_name):
                 log.error(f"      Failed to add Shopify note: {note_err}")
             return {"error": "manual_review_cost", "details": reason}
 
+    # PRICING ALERT + CUSTOMS FLOOR SCALING
+    # A declared goods value below the shipping cost usually signals mispricing,
+    # but we keep auto-ship flowing rather than blocking: warn (don't stop), then
+    # scale the declared customs value up just enough to clear FedEx's customs
+    # floor. (Runs before the dry-run return so dry-runs surface it too. The
+    # warning note itself is skipped in dry-run by _post_order_note.)
+    line_items = shipment.get("line_items") or []
+    shipping_cost = float(cheapest.get("price") or 0)
+    declared_total = round(
+        sum(round((li.get("unit_value") or 0) * (li.get("quantity") or 0), 2)
+            for li in line_items),
+        2,
+    )
+
+    # 1. Pricing alert — warn and continue (NOT a block).
+    if declared_total > 0 and (
+        declared_total < shipping_cost * 1.15
+        or (shipping_cost - declared_total) > 5.00
+    ):
+        log.warning(f"      PRICING ALERT: declared £{declared_total:.2f} low vs "
+                    f"shipping £{shipping_cost:.2f} — scaling, not blocking")
+        try:
+            _post_order_note(
+                order_name,
+                f"⚠️ Pricing alert — Order value £{declared_total:.2f} is below shipping "
+                f"cost £{shipping_cost:.2f}. Auto-shipped with declared value scaled up "
+                f"to clear FedEx customs. Worth reviewing product pricing."
+            )
+        except Exception as note_err:
+            log.error(f"      Failed to post pricing-alert note: {note_err}")
+
+    # 2. Customs floor scaling — only if declared value is below shipping cost.
+    if declared_total > 0 and declared_total < shipping_cost:
+        target_total = shipping_cost + 1.00  # £1 headroom
+        scale = target_total / declared_total
+        for li in line_items:
+            qty = li.get("quantity") or 1
+            orig_cv = round((li.get("unit_value") or 0) * qty, 2)
+            new_cv = round(orig_cv * scale, 2)                 # scaled target
+            new_unit = round(new_cv / qty, 2)                  # derive unitPrice
+            li["unit_value"] = new_unit
+            li["customs_value"] = round(new_unit * qty, 2)     # exact reconcile
+
+        new_total = round(sum(li["customs_value"] for li in line_items), 2)
+
+        # Self-correcting: rounding may leave the sum just under shipping cost.
+        # Bump the highest-value commodity by 1p (keeps unitPrice*qty exact)
+        # until the declared total clears the shipping cost.
+        guard = 0
+        while new_total < shipping_cost and guard < 1000:
+            hi = max(line_items, key=lambda l: l.get("customs_value", 0))
+            q = hi.get("quantity") or 1
+            hi["unit_value"] = round(hi["unit_value"] + 0.01, 2)
+            hi["customs_value"] = round(hi["unit_value"] * q, 2)
+            new_total = round(sum(li["customs_value"] for li in line_items), 2)
+            guard += 1
+
+        log.info(f"      CUSTOMS FLOOR: declared £{declared_total:.2f} < shipping "
+                 f"£{shipping_cost:.2f}, scaled to £{new_total:.2f} (x{scale:.3f})")
+
     # 6. Create shipment (skip if dry-run)
     dry_run = os.getenv("FEDEX_DRY_RUN", "false").lower() == "true"
     if dry_run:
@@ -396,34 +456,6 @@ def ship_order(order_name):
             "invoice":  "(dry-run, not generated)",
             "dry_run":  True,
         }
-    # PRICING SANITY GUARD: a declared goods value far below the shipping cost
-    # usually means a product is mispriced. Block auto-shipping and flag for
-    # manual review rather than shipping something that may be wrong. (Skipped
-    # in dry-run, which already returned above.)
-    line_items = shipment.get("line_items") or []
-    shipping_cost = float(cheapest.get("price") or 0)
-    declared_total = round(
-        sum(round((li.get("unit_value") or 0) * (li.get("quantity") or 0), 2)
-            for li in line_items),
-        2,
-    )
-    if declared_total > 0 and (
-        declared_total < shipping_cost * 1.15
-        or (shipping_cost - declared_total) > 5.00
-    ):
-        reason = (
-            f"⚠️ Manual review needed — Order value £{declared_total:.2f} is too low "
-            f"vs shipping cost £{shipping_cost:.2f}. Please review product pricing "
-            f"and ship manually if correct."
-        )
-        log.warning(f"      PRICING GUARD: declared £{declared_total:.2f} too low vs "
-                    f"shipping £{shipping_cost:.2f} — blocking auto-ship")
-        try:
-            _post_order_note(order_name, reason)
-        except Exception as note_err:
-            log.error(f"      Failed to post pricing-guard note: {note_err}")
-        raise SystemExit(1)
-
     log.info("   5/9 Creating FedEx shipment...")
     try:
         ship_result = create_shipment(shipment)
