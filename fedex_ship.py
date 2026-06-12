@@ -23,9 +23,11 @@ load_dotenv()
 ACCOUNT_NUMBER = os.getenv("FEDEX_ACCOUNT_NUMBER")
 
 
-# FedEx uses non-standard currency codes in the Ship API.
-# NOTE: GBP is just "GBP" — "UKL" is NOT a valid code and FedEx rejects it.
+# FedEx Ship API requires UKL for sterling (legacy code). Rate API accepts GBP,
+# Ship API does not for most service/destination combinations. CDN is FedEx's
+# code for Canadian dollars.
 FEDEX_CURRENCY = {
+    "GBP": "UKL",
     "CAD": "CDN",
 }
 
