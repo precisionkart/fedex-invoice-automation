@@ -396,35 +396,35 @@ def ship_order(order_name):
             "invoice":  "(dry-run, not generated)",
             "dry_run":  True,
         }
-    log.info("   5/9 Creating FedEx shipment...")
-    # DECLARED VALUE: send the TRUE declared customs value as-is. We previously
-    # scaled it up to clear the shipping cost, but FedEx validates declared
-    # customs value against actual goods value and rejected the scaled "fake"
-    # value as a misleading CURRENCY.TYPE.INVALID. totalDeclaredValue is for
-    # declared customs value, not freight — a value below the shipping cost is
-    # fine; FedEx ships low-value items every day. unitPrice / customsValue /
-    # totalDeclaredValue are all derived from the actual order values in
-    # build_ship_request (customsValue = round(unitPrice * quantity, 2)).
-    try:
-        line_items = shipment.get("line_items") or []
-        if line_items:
-            shipping_cost = float(cheapest.get("price") or 0)
-            declared_total = round(
-                sum(round((li.get("unit_value") or 0) * (li.get("quantity") or 0), 2)
-                    for li in line_items),
-                2,
-            )
-            if declared_total > 0 and declared_total < shipping_cost:
-                log.info(f"      Declared value GBP{declared_total:.2f} is below shipping "
-                         f"GBP{shipping_cost:.2f} — sending true declared value (no scaling)")
-                _post_order_note(
-                    order_name,
-                    f"ℹ️ Note: Order value £{declared_total:.2f} is below shipping cost "
-                    f"£{shipping_cost:.2f}. Sending true declared value."
-                )
-    except Exception as declared_err:
-        log.error(f"      Declared-value check error: {declared_err}")
+    # PRICING SANITY GUARD: a declared goods value far below the shipping cost
+    # usually means a product is mispriced. Block auto-shipping and flag for
+    # manual review rather than shipping something that may be wrong. (Skipped
+    # in dry-run, which already returned above.)
+    line_items = shipment.get("line_items") or []
+    shipping_cost = float(cheapest.get("price") or 0)
+    declared_total = round(
+        sum(round((li.get("unit_value") or 0) * (li.get("quantity") or 0), 2)
+            for li in line_items),
+        2,
+    )
+    if declared_total > 0 and (
+        declared_total < shipping_cost * 1.15
+        or (shipping_cost - declared_total) > 5.00
+    ):
+        reason = (
+            f"⚠️ Manual review needed — Order value £{declared_total:.2f} is too low "
+            f"vs shipping cost £{shipping_cost:.2f}. Please review product pricing "
+            f"and ship manually if correct."
+        )
+        log.warning(f"      PRICING GUARD: declared £{declared_total:.2f} too low vs "
+                    f"shipping £{shipping_cost:.2f} — blocking auto-ship")
+        try:
+            _post_order_note(order_name, reason)
+        except Exception as note_err:
+            log.error(f"      Failed to post pricing-guard note: {note_err}")
+        raise SystemExit(1)
 
+    log.info("   5/9 Creating FedEx shipment...")
     try:
         ship_result = create_shipment(shipment)
     except requests.exceptions.HTTPError as http_err:
