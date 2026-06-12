@@ -83,17 +83,15 @@ def _plain_english_fedex_failure(status_code, codes, messages, tx_id):
     # 5xx / unreachable — no status_code or server-side error
     if status_code is None or status_code >= 500:
         return (
-            "⚠️ Manual review needed — FedEx servers are unreachable right now. "
-            "Will need to retry the shipment later or ship manually."
+            "⚠️ Manual review needed — FedEx servers unreachable. "
+            "Please ship manually or retry later."
         )
 
     # Customs value below shipping cost
     if "TOTALCARRIAGEVALUE.EXCEEDS.CUSTOMSVALUE" in codes_upper:
         return (
             "⚠️ Manual review needed — FedEx rejected this shipment because the "
-            "order value was below the shipping cost. The system tried to scale "
-            "it up but it didn't satisfy FedEx's customs requirements. Worth "
-            "raising the product price or shipping manually via fedex.com."
+            "order value was below the shipping cost. Please ship manually."
         )
 
     # Product/commodity data issue: HS code, or currency error tied to a commodity
@@ -102,16 +100,13 @@ def _plain_english_fedex_failure(status_code, codes, messages, tx_id):
     ):
         return (
             "⚠️ Manual review needed — FedEx rejected this shipment due to a "
-            "product information issue (likely the HS code or country of origin "
-            "metafield). Check the product's fedex_hs_code and "
-            "fedex_country_of_origin metafields in Shopify admin."
+            "product information issue. Please ship manually."
         )
 
     # Generic 4xx fallback
     return (
         "⚠️ Manual review needed — FedEx rejected this shipment. "
-        f"Error code(s): {codes or 'unknown'}. Please ship manually via "
-        f"fedex.com or check FedEx support with transaction ID {tx_id or 'n/a'}."
+        "Please ship manually."
     )
 
 
@@ -415,14 +410,11 @@ def ship_order(order_name):
                 scale = min_required / current_total
                 for li in line_items:
                     li["unit_value"] = round((li.get("unit_value") or 0) * scale, 2)
-                new_declared = round(sum((li.get("unit_value") or 0) * (li.get("quantity") or 0) for li in line_items), 2)
                 log.info(f"      CUSTOMS FLOOR: declared GBP{current_total:.2f} < shipping GBP{shipping_cost:.2f}, scaled x{scale:.3f} to clear")
                 _post_order_note(
                     order_name,
                     f"⚠️ Manual review needed — Customs value was £{current_total:.2f} "
-                    f"but shipping cost was £{shipping_cost:.2f}, so we had to bump the "
-                    f"declared value up to £{new_declared:.2f} to satisfy FedEx. "
-                    f"Worth checking if the product price needs updating."
+                    f"but shipping cost was £{shipping_cost:.2f}. Please ship manually."
                 )
             elif current_total == 0:
                 log.warning(f"      CUSTOMS FLOOR: declared total is 0, cannot scale - shipment may fail")
